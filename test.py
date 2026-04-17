@@ -1,13 +1,12 @@
-# Start 2
+# Yaaa
 import json
 import hashlib
 import asyncio
 import time
 import tempfile
-import requests
 
 from datetime import datetime, timezone, timedelta
-from urllib.parse import urlparse, quote, parse_qs
+from urllib.parse import urlparse, quote
 
 import aiohttp
 import boto3
@@ -47,23 +46,18 @@ COUNTRIES = CONFIG.get("countries", [])
 KEYWORDS = CONFIG.get("keywords", [])
 COUNTRY_WEBSITES = CONFIG.get("country_websites", {})
 GLOBAL_WEBSITES = CONFIG.get("global_websites", [])
-COUNTRY_CODE_MAP = CONFIG.get("country_code_map", {})
 
+COUNTRY_CODE_MAP = CONFIG.get("country_code_map", {})
 DAYS_BACK = CONFIG.get("days_back", 2)
 
 MAX_RESULTS = 10
 QUERY_CONCURRENCY = 8
 ARTICLE_CONCURRENCY = 30
 
-# 🔥 Normalize keywords once
-KEYWORDS_LOWER = [k.lower() for k in KEYWORDS]
-
 print(
     "✅ Config loaded:",
     f"countries={len(COUNTRIES)}",
-    f"keywords={len(KEYWORDS)}",
-    f"country_sites={sum(len(v) for v in COUNTRY_WEBSITES.values())}",
-    f"global_sites={len(GLOBAL_WEBSITES)}"
+    f"keywords={len(KEYWORDS)}"
 )
 
 # -------------------------------------
@@ -77,34 +71,8 @@ def parse_date(value):
         return None
 
 
-def iso2_for_country(country):
-    return COUNTRY_CODE_MAP.get(country, country)
-
-
 # -------------------------------------
-# GOOGLE NEWS REAL URL FIX
-# -------------------------------------
-
-def extract_real_url(link):
-    try:
-        parsed = urlparse(link)
-        query = parse_qs(parsed.query)
-
-        if "url" in query:
-            return query["url"][0]
-
-        html = requests.get(link, timeout=5).text
-        soup = BeautifulSoup(html, "html.parser")
-        a = soup.find("a", href=True)
-
-        return a["href"] if a else link
-
-    except:
-        return link
-
-
-# -------------------------------------
-# 🔥 UPDATED RELEVANCE FILTER
+# RELEVANCE FILTER
 # -------------------------------------
 
 def is_relevant(article, country):
@@ -113,33 +81,12 @@ def is_relevant(article, country):
         (article.get("snippet") or "")
     ).lower()
 
-    country_lower = country.lower()
-    domain = article.get("domain", "")
-
-    local_sites = COUNTRY_WEBSITES.get(country, [])
-
     score = 0
 
-    # ✅ Country match
-    if country_lower in text:
+    if country.lower() in text:
         score += 2
 
-    # ✅ Trusted source boost
-    if any(site in domain for site in local_sites):
-        score += 2
-
-    # 🔥 Keyword matching (ALL keywords)
-    keyword_hits = 0
-
-    for k in KEYWORDS_LOWER:
-        words = k.split()
-        if any(word in text for word in words):
-            keyword_hits += 1
-
-    if keyword_hits >= 1:
-        score += 1
-
-    if keyword_hits >= 2:
+    if any(word in text for word in ["real estate", "housing", "infrastructure"]):
         score += 1
 
     return score >= 2
@@ -160,7 +107,7 @@ def is_duplicate(url):
 
 
 # -------------------------------------
-# SEARCH
+# SEARCH FUNCTIONS
 # -------------------------------------
 
 def ddg_search(query):
@@ -190,6 +137,7 @@ def ddg_search(query):
     return results
 
 
+# 🔥 FIXED GOOGLE NEWS (IMPORTANT)
 def google_news(query):
     results = []
 
@@ -200,13 +148,26 @@ def google_news(query):
         feed = feedparser.parse(url)
 
         for e in feed.entries[:MAX_RESULTS]:
-            real_url = extract_real_url(e.link)
+
+            real_url = ""
+
+            # ✅ Extract REAL URL from summary HTML
+            if hasattr(e, "summary"):
+                soup = BeautifulSoup(e.summary, "html.parser")
+                a_tag = soup.find("a")
+
+                if a_tag and a_tag.get("href"):
+                    real_url = a_tag["href"]
+
+            # fallback
+            if not real_url:
+                real_url = e.link
 
             results.append({
                 "title": e.title,
                 "url": real_url,
                 "date": getattr(e, "published", ""),
-                "snippet": getattr(e, "summary", ""),
+                "snippet": BeautifulSoup(e.summary, "html.parser").get_text(),
                 "domain": urlparse(real_url).netloc
             })
 
@@ -224,16 +185,9 @@ def build_queries():
     queries = []
 
     for c in COUNTRIES:
-
         for k in KEYWORDS:
             queries.append((c, f"{k} in {c}"))
             queries.append((c, f"{c} {k} news"))
-
-        for site in COUNTRY_WEBSITES.get(c, []):
-            queries.append((c, f"{c} site:{site}"))
-
-        for site in GLOBAL_WEBSITES:
-            queries.append((c, f"{c} news site:{site}"))
 
     return queries
 
@@ -265,8 +219,7 @@ async def extract_article(session, url):
 
     try:
         soup = BeautifulSoup(html, "html.parser")
-        paragraphs = soup.find_all("p")
-        return " ".join(p.get_text() for p in paragraphs)
+        return " ".join(p.get_text() for p in soup.find_all("p"))
     except:
         return ""
 
@@ -302,7 +255,7 @@ async def process_article(session, article, country, query):
 
 
 # -------------------------------------
-# PROCESS ARTICLES (with progress)
+# PROCESS ARTICLES
 # -------------------------------------
 
 async def process_articles(country, query, articles):
@@ -346,7 +299,7 @@ async def run_query(country, query):
 
 
 # -------------------------------------
-# RUN ALL QUERIES (with progress)
+# RUN ALL
 # -------------------------------------
 
 async def run_all_queries(queries):
