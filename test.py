@@ -5,7 +5,7 @@ import time
 import tempfile
 
 from datetime import datetime, timezone, timedelta
-from urllib.parse import urlparse, quote
+from urllib.parse import urlparse, quote_plus
 
 import aiohttp
 import boto3
@@ -35,7 +35,7 @@ s3 = boto3.client("s3")
 # LOAD CONFIG
 # -------------------------------------
 
-print("⬇️ Downloading config from S3...")
+print("⬇️ Downloading config...")
 s3.download_file(CONFIG_BUCKET, CONFIG_KEY, LOCAL_CONFIG)
 
 with open(LOCAL_CONFIG) as f:
@@ -45,14 +45,13 @@ COUNTRIES = CONFIG.get("countries", [])
 KEYWORDS = CONFIG.get("keywords", [])
 COUNTRY_WEBSITES = CONFIG.get("country_websites", {})
 GLOBAL_WEBSITES = CONFIG.get("global_websites", [])
-
 COUNTRY_CODE_MAP = CONFIG.get("country_code_map", {})
 
 DAYS_BACK = CONFIG.get("days_back", 2)
 
 MAX_RESULTS = 10
-QUERY_CONCURRENCY = 15
-ARTICLE_CONCURRENCY = 200
+QUERY_CONCURRENCY = 10          # reduced
+ARTICLE_CONCURRENCY = 50        # reduced
 
 print(
     "✅ Config loaded:",
@@ -72,29 +71,23 @@ def parse_date(value):
     except:
         return None
 
-
 def iso2_for_country(country):
     return COUNTRY_CODE_MAP.get(country, country)
-
 
 # -------------------------------------
 # RELEVANCE FILTER
 # -------------------------------------
 
 def is_relevant(article, country):
-    text = (
-        (article.get("title") or "") + " " +
-        (article.get("snippet") or "")
-    ).lower()
+    text = ((article.get("title") or "") + " " +
+            (article.get("snippet") or "")).lower()
 
-    country_lower = country.lower()
     domain = article.get("domain", "")
-
     local_sites = COUNTRY_WEBSITES.get(country, [])
 
     score = 0
 
-    if country_lower in text:
+    if country.lower() in text:
         score += 2
 
     if any(site in domain for site in local_sites):
@@ -104,7 +97,6 @@ def is_relevant(article, country):
         score += 1
 
     return score >= 2
-
 
 # -------------------------------------
 # DEDUP
@@ -119,19 +111,17 @@ def is_duplicate(url):
     seen.add(key)
     return False
 
-
 # -------------------------------------
-# SEARCH
+# SEARCH (FIXED)
 # -------------------------------------
 
 def ddg_search(query):
     results = []
-
     try:
-        encoded_query = quote(query)
+        encoded_query = quote_plus(query)
 
         with DDGS() as ddgs:
-            raw = ddgs.news(encoded_query, max_results=MAX_RESULTS)
+            raw = ddgs.news(query, max_results=MAX_RESULTS)
 
             for r in raw:
                 url = r.get("url")
@@ -147,7 +137,7 @@ def ddg_search(query):
                 })
 
     except Exception as e:
-        print("❌ DDG error:", e)
+        print("⚠️ DDG error:", e)
 
     return results
 
@@ -156,7 +146,7 @@ def google_news(query):
     results = []
 
     try:
-        encoded_query = quote(query)
+        encoded_query = quote_plus(query)
         url = f"https://news.google.com/rss/search?q={encoded_query}"
 
         feed = feedparser.parse(url)
@@ -173,10 +163,9 @@ def google_news(query):
             })
 
     except Exception as e:
-        print("❌ Google News error:", e)
+        print("⚠️ Google News error:", e)
 
     return results
-
 
 # -------------------------------------
 # BUILD QUERIES
@@ -198,18 +187,16 @@ def build_queries():
 
     return queries
 
-
 # -------------------------------------
-# ASYNC FETCH
+# FETCH
 # -------------------------------------
 
 async def fetch_html(session, url):
     try:
         async with session.get(url, timeout=10) as r:
-            return await r.text()
+            return await r.text(errors="ignore")
     except:
         return ""
-
 
 async def extract_article(session, url):
     html = await fetch_html(session, url)
@@ -226,11 +213,9 @@ async def extract_article(session, url):
 
     try:
         soup = BeautifulSoup(html, "html.parser")
-        paragraphs = soup.find_all("p")
-        return " ".join(p.get_text() for p in paragraphs)
+        return " ".join(p.get_text() for p in soup.find_all("p"))
     except:
         return ""
-
 
 async def process_article(session, article, country, query):
     url = article["url"]
@@ -261,9 +246,8 @@ async def process_article(session, article, country, query):
         "scraped_at": datetime.now(timezone.utc).isoformat()
     }
 
-
 # -------------------------------------
-# PROCESS ARTICLES (WITH PROGRESS)
+# PROCESS ARTICLES
 # -------------------------------------
 
 async def process_articles(country, query, articles):
@@ -290,13 +274,12 @@ async def process_articles(country, query, articles):
 
     return [r for r in results if r]
 
-
 # -------------------------------------
 # RUN QUERY
 # -------------------------------------
 
 async def run_query(country, query):
-    print(f"🔎 Running → {country} | {query}")
+    print(f"🔎 {country} → {query}")
 
     ddg = ddg_search(query)
     gnews = google_news(query)
@@ -305,9 +288,8 @@ async def run_query(country, query):
 
     return await process_articles(country, query, combined)
 
-
 # -------------------------------------
-# RUN ALL QUERIES
+# RUN ALL
 # -------------------------------------
 
 async def run_all_queries(queries):
@@ -334,7 +316,6 @@ async def run_all_queries(queries):
 
     return articles
 
-
 # -------------------------------------
 # MAIN
 # -------------------------------------
@@ -342,14 +323,14 @@ async def run_all_queries(queries):
 def main():
     start = time.time()
 
-    print("🚀 Run started:", datetime.now(timezone.utc))
+    print("🚀 Started:", datetime.now(timezone.utc))
 
     queries = build_queries()
     print("📊 Total queries:", len(queries))
 
     articles = asyncio.run(run_all_queries(queries))
 
-    print(f"📰 Articles collected: {len(articles)}")
+    print("📰 Articles collected:", len(articles))
 
     with open(OUTPUT_FILE, "w") as f:
         json.dump({"articles": articles}, f, indent=2)
@@ -358,8 +339,7 @@ def main():
 
     print("☁️ Uploaded to S3")
 
-    runtime = round(time.time() - start, 2)
-    print(f"⏱ Finished in {runtime} seconds")
+    print("⏱ Runtime:", round(time.time() - start, 2), "seconds")
 
 
 if __name__ == "__main__":
