@@ -70,7 +70,7 @@ def iso2_for_country(country):
 
 
 # -------------------------------------
-# RELEVANCE FILTER (VERY IMPORTANT)
+# RELEVANCE FILTER (BALANCED)
 # -------------------------------------
 
 def is_relevant(article, country):
@@ -79,12 +79,26 @@ def is_relevant(article, country):
         (article.get("snippet") or "")
     ).lower()
 
-    country = country.lower()
+    country_lower = country.lower()
+    domain = article.get("domain", "")
 
-    if country not in text:
-        return False
+    local_sites = COUNTRY_WEBSITES.get(country, [])
 
-    return True
+    score = 0
+
+    # mention of country
+    if country_lower in text:
+        score += 2
+
+    # local trusted source
+    if any(site in domain for site in local_sites):
+        score += 2
+
+    # domain relevance (your topic)
+    if any(word in text for word in ["real estate", "housing", "infrastructure"]):
+        score += 1
+
+    return score >= 2
 
 
 # -------------------------------------
@@ -148,7 +162,7 @@ def google_news(query):
 
 
 # -------------------------------------
-# BUILD QUERIES (UPDATED)
+# BUILD QUERIES (FIXED)
 # -------------------------------------
 
 def build_queries():
@@ -156,18 +170,18 @@ def build_queries():
 
     for c in COUNTRIES:
 
-        # keyword queries
+        # keyword-based queries
         for k in KEYWORDS:
             queries.append((c, f"{k} in {c}"))
             queries.append((c, f"{c} {k} news"))
 
-        # country-specific websites
+        # local websites
         for site in COUNTRY_WEBSITES.get(c, []):
             queries.append((c, f"{c} site:{site}"))
 
-        # optional: global sites (less priority)
+        # global websites (fixed bug)
         for site in GLOBAL_WEBSITES:
-            queries.append((c, f"{c} {k} site:{site}"))
+            queries.append((c, f"{c} news site:{site}"))
 
     return queries
 
@@ -211,7 +225,7 @@ async def process_article(session, article, country, query):
     if is_duplicate(url):
         return None
 
-    # relevance filter (KEY FIX)
+    # relevance filter
     if not is_relevant(article, country):
         return None
 
