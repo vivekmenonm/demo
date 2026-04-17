@@ -1,12 +1,12 @@
-# Start
 import json
 import hashlib
 import asyncio
 import time
 import tempfile
+import requests
 
 from datetime import datetime, timezone, timedelta
-from urllib.parse import urlparse, quote_plus
+from urllib.parse import urlparse, quote, parse_qs
 
 import aiohttp
 import boto3
@@ -51,8 +51,11 @@ COUNTRY_CODE_MAP = CONFIG.get("country_code_map", {})
 DAYS_BACK = CONFIG.get("days_back", 2)
 
 MAX_RESULTS = 10
-QUERY_CONCURRENCY = 10          # reduced
-ARTICLE_CONCURRENCY = 50        # reduced
+QUERY_CONCURRENCY = 8
+ARTICLE_CONCURRENCY = 30
+
+# 🔥 Normalize keywords once
+KEYWORDS_LOWER = [k.lower() for k in KEYWORDS]
 
 print(
     "✅ Config loaded:",
@@ -72,32 +75,74 @@ def parse_date(value):
     except:
         return None
 
+
 def iso2_for_country(country):
     return COUNTRY_CODE_MAP.get(country, country)
 
+
 # -------------------------------------
-# RELEVANCE FILTER
+# GOOGLE NEWS REAL URL FIX
+# -------------------------------------
+
+def extract_real_url(link):
+    try:
+        parsed = urlparse(link)
+        query = parse_qs(parsed.query)
+
+        if "url" in query:
+            return query["url"][0]
+
+        html = requests.get(link, timeout=5).text
+        soup = BeautifulSoup(html, "html.parser")
+        a = soup.find("a", href=True)
+
+        return a["href"] if a else link
+
+    except:
+        return link
+
+
+# -------------------------------------
+# 🔥 UPDATED RELEVANCE FILTER
 # -------------------------------------
 
 def is_relevant(article, country):
-    text = ((article.get("title") or "") + " " +
-            (article.get("snippet") or "")).lower()
+    text = (
+        (article.get("title") or "") + " " +
+        (article.get("snippet") or "")
+    ).lower()
 
+    country_lower = country.lower()
     domain = article.get("domain", "")
+
     local_sites = COUNTRY_WEBSITES.get(country, [])
 
     score = 0
 
-    if country.lower() in text:
+    # ✅ Country match
+    if country_lower in text:
         score += 2
 
+    # ✅ Trusted source boost
     if any(site in domain for site in local_sites):
         score += 2
 
-    if any(word in text for word in ["real estate", "housing", "infrastructure"]):
+    # 🔥 Keyword matching (ALL keywords)
+    keyword_hits = 0
+
+    for k in KEYWORDS_LOWER:
+        words = k.split()
+        if any(word in text for word in words):
+            keyword_hits += 1
+
+    if keyword_hits >= 1:
+        score += 1
+
+    if keyword_hits >= 2:
         score += 1
 
     return score >= 2
+
 
 # -------------------------------------
 # DEDUP
@@ -112,14 +157,15 @@ def is_duplicate(url):
     seen.add(key)
     return False
 
+
 # -------------------------------------
-# SEARCH (FIXED)
+# SEARCH
 # -------------------------------------
 
 def ddg_search(query):
     results = []
     try:
-        encoded_query = quote_plus(query)
+        query = quote(query)
 
         with DDGS() as ddgs:
             raw = ddgs.news(query, max_results=MAX_RESULTS)
@@ -147,26 +193,27 @@ def google_news(query):
     results = []
 
     try:
-        encoded_query = quote_plus(query)
+        encoded_query = quote(query)
         url = f"https://news.google.com/rss/search?q={encoded_query}"
 
         feed = feedparser.parse(url)
 
         for e in feed.entries[:MAX_RESULTS]:
-            link = e.link
+            real_url = extract_real_url(e.link)
 
             results.append({
                 "title": e.title,
-                "url": link,
+                "url": real_url,
                 "date": getattr(e, "published", ""),
                 "snippet": getattr(e, "summary", ""),
-                "domain": urlparse(link).netloc
+                "domain": urlparse(real_url).netloc
             })
 
     except Exception as e:
         print("⚠️ Google News error:", e)
 
     return results
+
 
 # -------------------------------------
 # BUILD QUERIES
@@ -176,6 +223,7 @@ def build_queries():
     queries = []
 
     for c in COUNTRIES:
+
         for k in KEYWORDS:
             queries.append((c, f"{k} in {c}"))
             queries.append((c, f"{c} {k} news"))
@@ -188,8 +236,9 @@ def build_queries():
 
     return queries
 
+
 # -------------------------------------
-# FETCH
+# ASYNC FETCH
 # -------------------------------------
 
 async def fetch_html(session, url):
@@ -198,6 +247,7 @@ async def fetch_html(session, url):
             return await r.text(errors="ignore")
     except:
         return ""
+
 
 async def extract_article(session, url):
     html = await fetch_html(session, url)
@@ -214,9 +264,11 @@ async def extract_article(session, url):
 
     try:
         soup = BeautifulSoup(html, "html.parser")
-        return " ".join(p.get_text() for p in soup.find_all("p"))
+        paragraphs = soup.find_all("p")
+        return " ".join(p.get_text() for p in paragraphs)
     except:
         return ""
+
 
 async def process_article(session, article, country, query):
     url = article["url"]
@@ -247,8 +299,9 @@ async def process_article(session, article, country, query):
         "scraped_at": datetime.now(timezone.utc).isoformat()
     }
 
+
 # -------------------------------------
-# PROCESS ARTICLES
+# PROCESS ARTICLES (with progress)
 # -------------------------------------
 
 async def process_articles(country, query, articles):
@@ -265,7 +318,7 @@ async def process_articles(country, query, articles):
             completed += 1
 
             if completed % 10 == 0:
-                print(f"   📄 {country}: {completed}/{total}")
+                print(f"📄 {country}: {completed}/{total}")
 
             return result
 
@@ -274,6 +327,7 @@ async def process_articles(country, query, articles):
         results = await asyncio.gather(*tasks)
 
     return [r for r in results if r]
+
 
 # -------------------------------------
 # RUN QUERY
@@ -289,8 +343,9 @@ async def run_query(country, query):
 
     return await process_articles(country, query, combined)
 
+
 # -------------------------------------
-# RUN ALL
+# RUN ALL QUERIES (with progress)
 # -------------------------------------
 
 async def run_all_queries(queries):
@@ -317,6 +372,7 @@ async def run_all_queries(queries):
 
     return articles
 
+
 # -------------------------------------
 # MAIN
 # -------------------------------------
@@ -340,7 +396,8 @@ def main():
 
     print("☁️ Uploaded to S3")
 
-    print("⏱ Runtime:", round(time.time() - start, 2), "seconds")
+    runtime = round(time.time() - start, 2)
+    print(f"⏱ Finished in {runtime}s")
 
 
 if __name__ == "__main__":
