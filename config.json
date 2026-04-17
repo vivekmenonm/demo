@@ -1,0 +1,120 @@
+{
+"countries": [
+"United Arab Emirates",
+"Australia",
+"Indonesia",
+"India",
+"Japan",
+"South Korea",
+"Malaysia",
+"New Zealand",
+"Russia",
+"Singapore",
+"Thailand",
+"South Africa"
+],
+
+"keywords": [
+"real estate market",
+"housing prices",
+"real estate development",
+"commercial real estate",
+"logistics and warehouses",
+"office space",
+"inflation rate",
+"interest rates",
+"infrastructure development",
+"construction cost",
+"labor supply",
+"corporate tax"
+],
+
+"country_websites": {
+"United Arab Emirates": [
+"gulfnews.com",
+"u.ae"
+],
+"Australia": [
+"abc.net.au",
+"news.com.au"
+],
+"Indonesia": [
+"antaranews.com",
+"thejakartapost.com"
+],
+"India": [
+"timesofindia.indiatimes.com",
+"newsonair.gov.in"
+],
+"Japan": [
+"www3.nhk.or.jp",
+"japantimes.co.jp"
+],
+"South Korea": [
+"en.yna.co.kr",
+"koreatimes.co.kr"
+],
+"Malaysia": [
+"thestar.com.my",
+"bernama.com"
+],
+"New Zealand": [
+"rnz.co.nz",
+"stuff.co.nz"
+],
+"Russia": [
+"themoscowtimes.com"
+],
+"Singapore": [
+"channelnewsasia.com",
+"todayonline.com",
+"straitstimes.com"
+],
+"Thailand": [
+"bangkokpost.com",
+"nationthailand.com"
+],
+"South Africa": [
+"dailymaverick.co.za",
+"sanews.gov.za"
+]
+},
+
+"global_websites": [
+"reuters.com",
+"apnews.com",
+"bbc.com",
+"aljazeera.com",
+"theguardian.com",
+"project-syndicate.org",
+"voxeu.org",
+"theconversation.com"
+],
+
+"days_back": 2,
+"allow_only_listed_websites": true,
+
+"config_bucket": "news-crawler-config",
+"config_key": "config.json",
+
+"result_bucket": "analytics-news",
+"result_prefix": "country_news",
+
+"output_dir": "country_news",
+"source_color": "#8B0000",
+
+"country_code_map": {
+"United Arab Emirates": "AE",
+"Australia": "AU",
+"Indonesia": "ID",
+"India": "IN",
+"Japan": "JP",
+"South Korea": "KR",
+"Malaysia": "MY",
+"New Zealand": "NZ",
+"Russia": "RU",
+"Singapore": "SG",
+"Thailand": "TH",
+"South Africa": "ZA"
+}
+}
