@@ -1,0 +1,59 @@
+{
+  "countries": [
+    "India",
+    "Thailand"
+  ],
+
+  "keywords": [
+    "Real Estate",
+    "Housing Prices",
+    "Infrastructure",
+    "Inflation",
+    "Interest Rates",
+    "Construction Cost",
+    "Labor Supply",
+    "Economy"
+  ],
+
+  "country_websites": {
+    "India": [
+      "timesofindia.indiatimes.com",
+      "thehindu.com",
+      "hindustantimes.com",
+      "moneycontrol.com",
+      "financialexpress.com",
+      "business-standard.com"
+    ],
+    "Thailand": [
+      "bangkokpost.com",
+      "nationthailand.com",
+      "thai.news.prd.go.th"
+    ]
+  },
+
+  "global_websites": [
+    "reuters.com",
+    "bbc.com",
+    "theguardian.com",
+    "aljazeera.com"
+  ],
+
+  "days_back": 2,
+
+  "allow_only_listed_websites": true,
+
+  "config_bucket": "news-crawler-config",
+  "config_key": "config.json",
+
+  "result_bucket": "analytics-news",
+  "result_prefix": "country_news",
+
+  "output_dir": "country_news",
+
+  "source_color": "#808080",
+
+  "country_code_map": {
+    "India": "IN",
+    "Thailand": "TH"
+  }
+}
