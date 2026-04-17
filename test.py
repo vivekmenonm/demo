@@ -5,7 +5,7 @@ import time
 import tempfile
 
 from datetime import datetime, timezone, timedelta
-from urllib.parse import urlparse
+from urllib.parse import urlparse, quote
 
 import aiohttp
 import boto3
@@ -126,13 +126,18 @@ def is_duplicate(url):
 
 def ddg_search(query):
     results = []
+
     try:
+        encoded_query = quote(query)
+
         with DDGS() as ddgs:
-            raw = ddgs.news(query, max_results=MAX_RESULTS)
+            raw = ddgs.news(encoded_query, max_results=MAX_RESULTS)
+
             for r in raw:
                 url = r.get("url")
                 if not url:
                     continue
+
                 results.append({
                     "title": r.get("title"),
                     "url": url,
@@ -140,19 +145,25 @@ def ddg_search(query):
                     "snippet": r.get("body"),
                     "domain": urlparse(url).netloc
                 })
+
     except Exception as e:
-        print("DDG error:", e)
+        print("❌ DDG error:", e)
+
     return results
 
 
 def google_news(query):
     results = []
-    url = f"https://news.google.com/rss/search?q={query}"
 
     try:
+        encoded_query = quote(query)
+        url = f"https://news.google.com/rss/search?q={encoded_query}"
+
         feed = feedparser.parse(url)
+
         for e in feed.entries[:MAX_RESULTS]:
             link = e.link
+
             results.append({
                 "title": e.title,
                 "url": link,
@@ -160,8 +171,9 @@ def google_news(query):
                 "snippet": getattr(e, "summary", ""),
                 "domain": urlparse(link).netloc
             })
+
     except Exception as e:
-        print("Google News error:", e)
+        print("❌ Google News error:", e)
 
     return results
 
@@ -280,11 +292,11 @@ async def process_articles(country, query, articles):
 
 
 # -------------------------------------
-# RUN QUERY (WITH LOG)
+# RUN QUERY
 # -------------------------------------
 
 async def run_query(country, query):
-    print(f"🔎 Running query → {country} | {query}")
+    print(f"🔎 Running → {country} | {query}")
 
     ddg = ddg_search(query)
     gnews = google_news(query)
@@ -295,7 +307,7 @@ async def run_query(country, query):
 
 
 # -------------------------------------
-# RUN ALL QUERIES (WITH PROGRESS)
+# RUN ALL QUERIES
 # -------------------------------------
 
 async def run_all_queries(queries):
@@ -309,7 +321,7 @@ async def run_all_queries(queries):
         async with semaphore:
             result = await run_query(c, q)
             completed += 1
-            print(f"✅ Query {completed}/{total} done")
+            print(f"✅ Query {completed}/{total}")
             return result
 
     tasks = [sem_task(c, q) for c, q in queries]
@@ -337,7 +349,7 @@ def main():
 
     articles = asyncio.run(run_all_queries(queries))
 
-    print(f"📰 Total articles collected: {len(articles)}")
+    print(f"📰 Articles collected: {len(articles)}")
 
     with open(OUTPUT_FILE, "w") as f:
         json.dump({"articles": articles}, f, indent=2)
@@ -347,7 +359,7 @@ def main():
     print("☁️ Uploaded to S3")
 
     runtime = round(time.time() - start, 2)
-    print(f"⏱ Run finished in {runtime} seconds")
+    print(f"⏱ Finished in {runtime} seconds")
 
 
 if __name__ == "__main__":
