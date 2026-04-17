@@ -1,4 +1,3 @@
-# Yaaa
 import json
 import hashlib
 import asyncio
@@ -46,6 +45,7 @@ COUNTRIES = CONFIG.get("countries", [])
 KEYWORDS = CONFIG.get("keywords", [])
 COUNTRY_WEBSITES = CONFIG.get("country_websites", {})
 GLOBAL_WEBSITES = CONFIG.get("global_websites", [])
+ALLOW_ONLY_LISTED = CONFIG.get("allow_only_listed_websites", False)
 
 COUNTRY_CODE_MAP = CONFIG.get("country_code_map", {})
 DAYS_BACK = CONFIG.get("days_back", 2)
@@ -57,7 +57,8 @@ ARTICLE_CONCURRENCY = 30
 print(
     "✅ Config loaded:",
     f"countries={len(COUNTRIES)}",
-    f"keywords={len(KEYWORDS)}"
+    f"keywords={len(KEYWORDS)}",
+    f"allow_filter={ALLOW_ONLY_LISTED}"
 )
 
 # -------------------------------------
@@ -67,6 +68,19 @@ print(
 def parse_date(value):
     try:
         return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except:
+        return None
+
+
+# -------------------------------------
+# GOOGLE NEWS FIX
+# -------------------------------------
+
+def extract_real_url_from_summary(summary):
+    try:
+        soup = BeautifulSoup(summary, "html.parser")
+        a = soup.find("a")
+        return a["href"] if a and a.get("href") else None
     except:
         return None
 
@@ -93,21 +107,43 @@ def is_relevant(article, country):
 
 
 # -------------------------------------
-# DEDUP
+# DOMAIN FILTER (IMPORTANT)
 # -------------------------------------
 
-seen = set()
-
-def is_duplicate(url):
-    key = hashlib.md5(url.encode()).hexdigest()
-    if key in seen:
+def is_allowed_domain(domain, country):
+    if not ALLOW_ONLY_LISTED:
         return True
-    seen.add(key)
+
+    allowed = COUNTRY_WEBSITES.get(country, []) + GLOBAL_WEBSITES
+
+    return any(site in domain for site in allowed)
+
+
+# -------------------------------------
+# DEDUP (URL + TITLE)
+# -------------------------------------
+
+seen_urls = set()
+seen_titles = set()
+
+def is_duplicate(article):
+    url = article["url"]
+    title = (article.get("title") or "").lower().strip()
+
+    url_key = hashlib.md5(url.encode()).hexdigest()
+    title_key = hashlib.md5(title.encode()).hexdigest()
+
+    if url_key in seen_urls or title_key in seen_titles:
+        return True
+
+    seen_urls.add(url_key)
+    seen_titles.add(title_key)
+
     return False
 
 
 # -------------------------------------
-# SEARCH FUNCTIONS
+# SEARCH
 # -------------------------------------
 
 def ddg_search(query):
@@ -137,7 +173,6 @@ def ddg_search(query):
     return results
 
 
-# 🔥 FIXED GOOGLE NEWS (IMPORTANT)
 def google_news(query):
     results = []
 
@@ -149,17 +184,8 @@ def google_news(query):
 
         for e in feed.entries[:MAX_RESULTS]:
 
-            real_url = ""
+            real_url = extract_real_url_from_summary(e.summary)
 
-            # ✅ Extract REAL URL from summary HTML
-            if hasattr(e, "summary"):
-                soup = BeautifulSoup(e.summary, "html.parser")
-                a_tag = soup.find("a")
-
-                if a_tag and a_tag.get("href"):
-                    real_url = a_tag["href"]
-
-            # fallback
             if not real_url:
                 real_url = e.link
 
@@ -172,7 +198,7 @@ def google_news(query):
             })
 
     except Exception as e:
-        print("⚠️ Google News error:", e)
+        print("⚠️ Google error:", e)
 
     return results
 
@@ -193,7 +219,7 @@ def build_queries():
 
 
 # -------------------------------------
-# ASYNC FETCH
+# FETCH + EXTRACT
 # -------------------------------------
 
 async def fetch_html(session, url):
@@ -227,7 +253,10 @@ async def extract_article(session, url):
 async def process_article(session, article, country, query):
     url = article["url"]
 
-    if is_duplicate(url):
+    if is_duplicate(article):
+        return None
+
+    if not is_allowed_domain(article["domain"], country):
         return None
 
     if not is_relevant(article, country):
@@ -249,8 +278,7 @@ async def process_article(session, article, country, query):
         "domain": article["domain"],
         "date": article["date"],
         "snippet": article["snippet"],
-        "article_content": content,
-        "scraped_at": datetime.now(timezone.utc).isoformat()
+        "article_content": content
     }
 
 
