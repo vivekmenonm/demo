@@ -35,7 +35,7 @@ s3 = boto3.client("s3")
 # LOAD CONFIG
 # -------------------------------------
 
-print("Downloading config...")
+print("⬇️ Downloading config from S3...")
 s3.download_file(CONFIG_BUCKET, CONFIG_KEY, LOCAL_CONFIG)
 
 with open(LOCAL_CONFIG) as f:
@@ -54,6 +54,14 @@ MAX_RESULTS = 10
 QUERY_CONCURRENCY = 15
 ARTICLE_CONCURRENCY = 200
 
+print(
+    "✅ Config loaded:",
+    f"countries={len(COUNTRIES)}",
+    f"keywords={len(KEYWORDS)}",
+    f"country_sites={sum(len(v) for v in COUNTRY_WEBSITES.values())}",
+    f"global_sites={len(GLOBAL_WEBSITES)}"
+)
+
 # -------------------------------------
 # HELPERS
 # -------------------------------------
@@ -70,7 +78,7 @@ def iso2_for_country(country):
 
 
 # -------------------------------------
-# RELEVANCE FILTER (BALANCED)
+# RELEVANCE FILTER
 # -------------------------------------
 
 def is_relevant(article, country):
@@ -86,15 +94,12 @@ def is_relevant(article, country):
 
     score = 0
 
-    # mention of country
     if country_lower in text:
         score += 2
 
-    # local trusted source
     if any(site in domain for site in local_sites):
         score += 2
 
-    # domain relevance (your topic)
     if any(word in text for word in ["real estate", "housing", "infrastructure"]):
         score += 1
 
@@ -135,8 +140,8 @@ def ddg_search(query):
                     "snippet": r.get("body"),
                     "domain": urlparse(url).netloc
                 })
-    except:
-        pass
+    except Exception as e:
+        print("DDG error:", e)
     return results
 
 
@@ -155,31 +160,27 @@ def google_news(query):
                 "snippet": getattr(e, "summary", ""),
                 "domain": urlparse(link).netloc
             })
-    except:
-        pass
+    except Exception as e:
+        print("Google News error:", e)
 
     return results
 
 
 # -------------------------------------
-# BUILD QUERIES (FIXED)
+# BUILD QUERIES
 # -------------------------------------
 
 def build_queries():
     queries = []
 
     for c in COUNTRIES:
-
-        # keyword-based queries
         for k in KEYWORDS:
             queries.append((c, f"{k} in {c}"))
             queries.append((c, f"{c} {k} news"))
 
-        # local websites
         for site in COUNTRY_WEBSITES.get(c, []):
             queries.append((c, f"{c} site:{site}"))
 
-        # global websites (fixed bug)
         for site in GLOBAL_WEBSITES:
             queries.append((c, f"{c} news site:{site}"))
 
@@ -225,11 +226,9 @@ async def process_article(session, article, country, query):
     if is_duplicate(url):
         return None
 
-    # relevance filter
     if not is_relevant(article, country):
         return None
 
-    # date filter
     if DAYS_BACK:
         cutoff = datetime.now(timezone.utc) - timedelta(days=DAYS_BACK)
         parsed = parse_date(article.get("date") or "")
@@ -252,17 +251,28 @@ async def process_article(session, article, country, query):
 
 
 # -------------------------------------
-# PROCESS ARTICLES
+# PROCESS ARTICLES (WITH PROGRESS)
 # -------------------------------------
 
 async def process_articles(country, query, articles):
     connector = aiohttp.TCPConnector(limit=ARTICLE_CONCURRENCY)
 
+    total = len(articles)
+    completed = 0
+
     async with aiohttp.ClientSession(connector=connector) as session:
-        tasks = [
-            process_article(session, a, country, query)
-            for a in articles
-        ]
+
+        async def wrapped(a):
+            nonlocal completed
+            result = await process_article(session, a, country, query)
+            completed += 1
+
+            if completed % 10 == 0:
+                print(f"   📄 {country}: {completed}/{total}")
+
+            return result
+
+        tasks = [wrapped(a) for a in articles]
 
         results = await asyncio.gather(*tasks)
 
@@ -270,10 +280,12 @@ async def process_articles(country, query, articles):
 
 
 # -------------------------------------
-# RUN QUERY
+# RUN QUERY (WITH LOG)
 # -------------------------------------
 
 async def run_query(country, query):
+    print(f"🔎 Running query → {country} | {query}")
+
     ddg = ddg_search(query)
     gnews = google_news(query)
 
@@ -283,15 +295,22 @@ async def run_query(country, query):
 
 
 # -------------------------------------
-# RUN ALL
+# RUN ALL QUERIES (WITH PROGRESS)
 # -------------------------------------
 
 async def run_all_queries(queries):
     semaphore = asyncio.Semaphore(QUERY_CONCURRENCY)
 
+    total = len(queries)
+    completed = 0
+
     async def sem_task(c, q):
+        nonlocal completed
         async with semaphore:
-            return await run_query(c, q)
+            result = await run_query(c, q)
+            completed += 1
+            print(f"✅ Query {completed}/{total} done")
+            return result
 
     tasks = [sem_task(c, q) for c, q in queries]
 
@@ -311,21 +330,24 @@ async def run_all_queries(queries):
 def main():
     start = time.time()
 
-    print("Run started:", datetime.now(timezone.utc))
+    print("🚀 Run started:", datetime.now(timezone.utc))
 
     queries = build_queries()
-    print("Total queries:", len(queries))
+    print("📊 Total queries:", len(queries))
 
     articles = asyncio.run(run_all_queries(queries))
 
-    print("Articles collected:", len(articles))
+    print(f"📰 Total articles collected: {len(articles)}")
 
     with open(OUTPUT_FILE, "w") as f:
         json.dump({"articles": articles}, f, indent=2)
 
     s3.upload_file(OUTPUT_FILE, RESULT_BUCKET, f"{RESULT_PREFIX}/news.json")
 
-    print("Uploaded to S3")
+    print("☁️ Uploaded to S3")
+
+    runtime = round(time.time() - start, 2)
+    print(f"⏱ Run finished in {runtime} seconds")
 
 
 if __name__ == "__main__":
