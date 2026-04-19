@@ -253,9 +253,9 @@ async def process(session, art, country, keyword, seen, source_type):
             "category": CATEGORY_LABELS[idx],
             "title": art["title"],
             "url": url,
-            "domain": domain,
-            "published_date": d.isoformat(),
-            "content": content,
+            "source": domain,
+            "date": d.isoformat(),
+            "article_content": content,
             "score": score,
             "embedding": emb
         }
